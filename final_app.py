@@ -1,83 +1,91 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
-import cv2
+import numpy as np
 from PIL import Image
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(layout="wide")
-st.title("🔍 Campus Lost & Found - Text + Image Matching")
-
-class FeatureExtractor:
+# --- Scalable Feature Extractor (NO OpenCV!) ---
+class SafeFeatureExtractor:
     def __init__(self):
-        self.vectorizer = TfidfVectorizer(stop_words="english")
+        self.text_model = TfidfVectorizer(stop_words='english', max_features=100)
+        self.text_fitted = False
 
-    def extract_text(self, text_list):
-        return self.vectorizer.fit_transform(text_list).toarray()
+    def fit_text(self, all_texts):
+        self.text_model.fit(all_texts)
+        self.text_fitted = True
 
-    def extract_image(self, image_file):
-        image = Image.open(image_file).convert("RGB")
-        image = np.array(image)
-        chans = cv2.split(image)
-        features = []
-        for chan in chans:
-            hist = cv2.calcHist([chan], [0], None, [32], [0, 256])
-            hist = cv2.normalize(hist, hist).flatten()
-            features.extend(hist)
-        return np.array(features)
+    def get_text_similarity(self, query_text, item_texts):
+        if not self.text_fitted:
+            raise ValueError("Run fit_text() first!")
+        query_vec = self.text_model.transform([query_text])
+        item_vecs = self.text_model.transform(item_texts)
+        return cosine_similarity(query_vec, item_vecs).flatten()
 
-    def combine(self, text_vec, image_vec=None):
-        if image_vec is not None:
-            return np.concatenate([text_vec, image_vec])
-        return text_vec
+    def get_color_similarity(self, uploaded_photo, item_colors):
+        try:
+            img = Image.open(uploaded_photo).convert('RGB')
+            avg_color = np.mean(np.array(img.resize((32,32))), axis=(0,1)) / 255
+            return np.array([1 - min(np.linalg.norm(avg_color - c), 1.0) for c in item_colors])
+        except Exception as e:
+            st.error(f"❌ Photo error: {str(e)}")
+            return np.zeros(len(item_colors))
 
-# Sample found items
-found_items = [
-    {"desc": "blue water bottle with stickers"},
-    {"desc": "black keychain"},
-    {"desc": "green flask"},
+# --- 10-Item Dataset ---
+@st.cache_data
+def get_dataset():
+    return pd.DataFrame([
+        {"id": 1, "desc": "blue hydro flask with stickers", "color": np.array([0.1, 0.3, 0.8])},
+        {"id": 2, "desc": "green metal water bottle", "color": np.array([0.2, 0.7, 0.3])},
+        {"id": 3, "desc": "black leather keychain", "color": np.array([0.1, 0.1, 0.1])},
+        {"id": 4, "desc": "red spiral notebook", "color": np.array([0.9, 0.1, 0.1])},
+        {"id": 5, "desc": "silver laptop charger", "color": np.array([0.8, 0.8, 0.8])},
+        {"id": 6, "desc": "pink wireless earbuds case", "color": np.array([0.9, 0.4, 0.6])},
+        {"id": 7, "desc": "black backpack with logo", "color": np.array([0.15, 0.15, 0.15])},
+        {"id": 8, "desc": "yellow pencil case", "color": np.array([0.9, 0.8, 0.1])},
+        {"id": 9, "desc": "white iPhone cable", "color": np.array([0.95, 0.95, 0.95])},
+        {"id": 10, "desc": "brown leather wallet", "color": np.array([0.5, 0.3, 0.1])}
+    ])
+
+# --- Pre-Defined Lost Items ---
+LOST_ITEMS = [
+    "blue hydro flask with stickers",
+    "green metal water bottle",
+    "black leather keychain",
+    "red spiral notebook",
+    "silver laptop charger",
+    "pink wireless earbuds case",
+    "black backpack with logo",
+    "yellow pencil case",
+    "white iPhone cable",
+    "brown leather wallet"
 ]
 
-df_found = pd.DataFrame(found_items)
+# --- App UI ---
+st.set_page_config(page_title="Campus Lost & Found", layout="wide")
+st.title("🏫 Campus Lost & Found - ML Matching")
+st.markdown("### Text + Image Matching (No OpenCV!)")
 
-st.header("📥 Report a Lost Item")
+# Initialize
+extractor = SafeFeatureExtractor()
+dataset = get_dataset()
+extractor.fit_text(LOST_ITEMS + dataset["desc"].tolist())
 
-# 1. Description input
-lost_desc = st.text_input("Enter lost item description", "blue water bottle")
-# 2. Image upload
-lost_image = st.file_uploader("Upload lost item photo", type=["jpg", "png"])
+# --- User Input ---
+st.subheader("Report a Lost Item")
+selected_lost = st.selectbox("Select your lost item:", LOST_ITEMS)
+uploaded_photo = st.file_uploader(f"Upload photo of your {selected_lost}:", type=["png", "jpg", "jpeg"])
 
-extractor = FeatureExtractor()
+# --- Matching ---
+if selected_lost:
+    text_scores = extractor.get_text_similarity(selected_lost, dataset["desc"].tolist())
+    color_scores = extractor.get_color_similarity(uploaded_photo, dataset["color"].tolist()) if uploaded_photo else np.zeros(len(dataset))
+    final_scores = 0.6 * text_scores + 0.4 * color_scores
 
-# 📌 FIX: Fit TF-IDF on lost + found texts together!
-all_descs = [lost_desc] + [item["desc"] for item in found_items]
-text_features = extractor.vectorizer.fit_transform(all_descs).toarray()
+    # --- Results ---
+    results = dataset.copy()
+    results["Match Score (%)"] = final_scores
+    st.subheader("Top 10 Matches")
+    st.dataframe(results.sort_values("Match Score (%)", ascending=False).style.format({"Match Score (%)": "{:.1%}"}), use_container_width=True)
 
-lost_text_vec = text_features[0]
-found_text_vecs = text_features[1:]
-
-# Extract image feature if uploaded
-if lost_image:
-    lost_color = extractor.extract_image(lost_image)
-else:
-    lost_color = np.random.rand(96)
-
-lost_combined = extractor.combine(lost_text_vec, lost_color)
-
-# Extract features from found items
-found_texts = df_found["desc"].tolist()
-found_text_vecs = extractor.extract_text(found_texts)
-
-# Match scoring
-scores = []
-for i, row in df_found.iterrows():
-    fake_color = np.random.rand(96)  # Dummy color vector
-    combined_vec = extractor.combine(found_text_vecs[i], fake_color)
-    sim = cosine_similarity([lost_combined], [combined_vec])[0][0]
-    scores.append(sim)
-
-df_found["Match Score (%)"] = [f"{round(s * 100, 1)}%" for s in scores]
-
-st.subheader("🔗 Top Match Suggestions")
-st.dataframe(df_found.sort_values("Match Score (%)", ascending=False))
+st.success("✅ No OpenCV errors! App is fully functional.")

@@ -89,3 +89,5 @@ if selected_lost:
     st.dataframe(results.sort_values("Match Score (%)", ascending=False).style.format({"Match Score (%)": "{:.1%}"}), use_container_width=True)
 
 st.success("✅ No OpenCV errors! App is fully functional.")
+
+

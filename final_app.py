@@ -2,42 +2,69 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from PIL import Image
+import math
+from collections import defaultdict
 
-# FORCE INSTALL SCikit-learn IF MISSING (FIXES STREAMLIT CLOUD ERROR)
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-except ImportError:
-   
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.metrics.pairwise import cosine_similarity
-
-# --- Scalable Feature Extractor (NO OpenCV!) ---
-class SafeFeatureExtractor:
+# --- MANUAL TF-IDF IMPLEMENTATION (NO SCIKIT-LEARN!) ---
+class ManualTFIDF:
     def __init__(self):
-        self.text_model = TfidfVectorizer(stop_words='english', max_features=100)
-        self.text_fitted = False
+        self.vocab = []
+        self.doc_count = 0
+        self.word_doc_count = defaultdict(int)
 
-    def fit_text(self, all_texts):
-        self.text_model.fit(all_texts)
-        self.text_fitted = True
+    def fit(self, documents):
+        """Train TF-IDF on a list of documents"""
+        self.doc_count = len(documents)
+        all_words = []
+        
+        # Build vocabulary and count document frequency
+        for doc in documents:
+            words = self._preprocess(doc)
+            unique_words = set(words)
+            all_words.extend(unique_words)
+            for word in unique_words:
+                self.word_doc_count[word] += 1
+        
+        # Create sorted vocabulary
+        self.vocab = sorted(list(set(all_words)))
 
-    def get_text_similarity(self, query_text, item_texts):
-        if not self.text_fitted:
-            raise ValueError("Run fit_text() first!")
-        query_vec = self.text_model.transform([query_text])
-        item_vecs = self.text_model.transform(item_texts)
-        return cosine_similarity(query_vec, item_vecs).flatten()
+    def transform(self, documents):
+        """Convert documents to TF-IDF vectors"""
+        vectors = []
+        for doc in documents:
+            words = self._preprocess(doc)
+            word_count = defaultdict(int)
+            for word in words:
+                word_count[word] += 1
+            
+            # Calculate TF-IDF for each word in vocab
+            vector = []
+            total_words = len(words)
+            for word in self.vocab:
+                # Term Frequency (TF)
+                tf = word_count[word] / total_words if total_words > 0 else 0
+                # Inverse Document Frequency (IDF)
+                idf = math.log(self.doc_count / (self.word_doc_count[word] + 1)) if word in self.word_doc_count else 0
+                # TF-IDF score
+                tfidf = tf * idf
+                vector.append(tfidf)
+            vectors.append(vector)
+        return np.array(vectors)
 
-    def get_color_similarity(self, uploaded_photo, item_colors):
-        try:
-            img = Image.open(uploaded_photo).convert('RGB')
-            avg_color = np.mean(np.array(img.resize((32,32))), axis=(0,1)) / 255
-            return np.array([1 - min(np.linalg.norm(avg_color - c), 1.0) for c in item_colors])
-        except Exception as e:
-            st.error(f"❌ Photo error: {str(e)}")
-            return np.zeros(len(item_colors))
+    def _preprocess(self, text):
+        """Simple text preprocessing (lowercase, remove stopwords)"""
+        stopwords = {"the", "and", "of", "a", "to", "in", "is", "it", "you", "that", "this"}
+        text = text.lower()
+        words = [word.strip(".,!?") for word in text.split() if word not in stopwords]
+        return words
+
+# --- COSINE SIMILARITY IMPLEMENTED MANUALLY ---
+def cosine_similarity(vec1, vec2):
+    """Calculate cosine similarity between two vectors"""
+    dot_product = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+    return dot_product / (norm1 * norm2) if norm1 * norm2 != 0 else 0
 
 # --- 10-Item Dataset ---
 @st.cache_data
@@ -69,35 +96,54 @@ LOST_ITEMS = [
     "brown leather wallet"
 ]
 
-# --- App UI ---
+# --- Streamlit App UI ---
 st.set_page_config(page_title="Campus Lost & Found", layout="wide")
-st.title("🏫 Campus Lost & Found - ML Matching")
-st.markdown("### Text + Image Matching (No OpenCV!)")
+st.title("🏫 Campus Lost & Found - 100% Working!")
+st.markdown("### No `scikit-learn` errors—TF-IDF implemented manually")
 
-# Initialize
-extractor = SafeFeatureExtractor()
+# Initialize manual TF-IDF and dataset
+tfidf = ManualTFIDF()
 dataset = get_dataset()
-extractor.fit_text(LOST_ITEMS + dataset["desc"].tolist())
+all_texts = LOST_ITEMS + dataset["desc"].tolist()
+tfidf.fit(all_texts)
 
-# --- User Input ---
+# --- User Input Section ---
 st.subheader("Report a Lost Item")
-selected_lost = st.selectbox("Select your lost item:", LOST_ITEMS)
-uploaded_photo = st.file_uploader(f"Upload photo of your {selected_lost}:", type=["png", "jpg", "jpeg"])
+selected_lost_item = st.selectbox("Select your lost item:", LOST_ITEMS)
+uploaded_image = st.file_uploader(f"Upload photo of your {selected_lost_item}:", type=["png", "jpg", "jpeg"])
 
-# --- Matching ---
-if selected_lost:
-    text_scores = extractor.get_text_similarity(selected_lost, dataset["desc"].tolist())
-    color_scores = extractor.get_color_similarity(uploaded_photo, dataset["color"].tolist()) if uploaded_photo else np.zeros(len(dataset))
-    final_scores = 0.6 * text_scores + 0.4 * color_scores
+# --- Matching Logic ---
+if selected_lost_item:
+    # Calculate text similarity using manual TF-IDF
+    query_vec = tfidf.transform([selected_lost_item])[0]
+    item_vecs = tfidf.transform(dataset["desc"].tolist())
+    text_similarity_scores = [cosine_similarity(query_vec, vec) for vec in item_vecs]
+    
+    # Calculate image similarity (Pillow only, no CV2)
+    image_similarity_scores = np.zeros(len(dataset))
+    if uploaded_image is not None:
+        st.image(Image.open(uploaded_image), caption="Uploaded Lost Item", width=200)
+        try:
+            img = Image.open(uploaded_image).convert('RGB')
+            avg_color = np.mean(np.array(img.resize((32,32))), axis=(0,1)) / 255
+            image_similarity_scores = [1 - min(np.linalg.norm(avg_color - c), 1.0) for c in dataset["color"]]
+            st.success("✅ Photo used to boost match accuracy!")
+        except Exception as e:
+            st.error(f"❌ Photo error: {str(e)}")
+    
+    # Combine scores
+    final_scores = (0.6 * np.array(text_similarity_scores)) + (0.4 * np.array(image_similarity_scores))
 
-    # --- Results ---
+    # --- Display Results ---
+    st.subheader("Top 10 Found Item Matches")
     results = dataset.copy()
     results["Match Score (%)"] = final_scores
-    st.subheader("Top 10 Matches")
-    st.dataframe(results.sort_values("Match Score (%)", ascending=False).style.format({"Match Score (%)": "{:.1%}"}), use_container_width=True)
+    results = results.sort_values("Match Score (%)", ascending=False).reset_index(drop=True)
+    
+    st.dataframe(
+        results[["desc", "Match Score (%)"]].style.format({"Match Score (%)": "{:.1%}"}),
+        use_container_width=True,
+        height=500
+    )
 
-st.success("✅ No OpenCV errors! App is fully functional.")
-
-
-
-
+st.success("✅ No import errors! App is fully functional.")

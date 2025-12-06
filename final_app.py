@@ -8,9 +8,7 @@ try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 except ImportError:
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "scikit-learn==1.5.0"])
+   
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import cosine_similarity
@@ -99,6 +97,7 @@ if selected_lost:
     st.dataframe(results.sort_values("Match Score (%)", ascending=False).style.format({"Match Score (%)": "{:.1%}"}), use_container_width=True)
 
 st.success("✅ No OpenCV errors! App is fully functional.")
+
 
 
 

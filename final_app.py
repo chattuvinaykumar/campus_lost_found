@@ -9,7 +9,7 @@ from collections import defaultdict
 # --- FIRST STREAMLIT COMMAND: PAGE CONFIG (MUST BE FIRST) ---
 st.set_page_config(page_title="Campus Lost & Found", layout="wide")
 
-# --- MANUAL TF-IDF IMPLEMENTATION (NO EXTERNAL DEPENDENCIES) ---
+# --- MANUAL TF-IDF IMPLEMENTATION (WITH MISSING METHOD ADDED) ---
 class ManualTFIDF:
     def __init__(self):
         self.vocab = []
@@ -55,20 +55,28 @@ class ManualTFIDF:
             vectors.append(vector)
         return np.array(vectors)
 
+    def get_text_similarity(self, query_text, item_texts):
+        """Calculate cosine similarity between query text and list of item texts"""
+        # Convert query and items to TF-IDF vectors
+        query_vec = self.transform([query_text])[0]
+        item_vecs = self.transform(item_texts)
+        # Calculate cosine similarity for each item
+        similarities = [self._cosine_similarity(query_vec, vec) for vec in item_vecs]
+        return similarities
+
+    def _cosine_similarity(self, vec1, vec2):
+        """Private helper method for cosine similarity"""
+        dot_product = np.dot(vec1, vec2)
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        return dot_product / (norm1 * norm2) if norm1 * norm2 != 0 else 0
+
     def _preprocess(self, text):
         """Simple text preprocessing (lowercase, remove stopwords)"""
         stopwords = {"the", "and", "of", "a", "to", "in", "is", "it", "you", "that", "this"}
         text = text.lower()
         words = [word.strip(".,!?") for word in text.split() if word not in stopwords]
         return words
-
-# --- COSINE SIMILARITY IMPLEMENTED MANUALLY ---
-def cosine_similarity(vec1, vec2):
-    """Calculate cosine similarity between two vectors"""
-    dot_product = np.dot(vec1, vec2)
-    norm1 = np.linalg.norm(vec1)
-    norm2 = np.linalg.norm(vec2)
-    return dot_product / (norm1 * norm2) if norm1 * norm2 != 0 else 0
 
 # --- 10-Item Found Item Dataset ---
 @st.cache_data
@@ -117,7 +125,7 @@ uploaded_image = st.file_uploader(f"Upload photo of your {selected_lost_item}:",
 
 # --- Matching Logic ---
 if selected_lost_item:
-    # Calculate text similarity
+    # Calculate text similarity (uses the newly added get_text_similarity method)
     text_similarity_scores = extractor.get_text_similarity(selected_lost_item, found_dataset["desc"].tolist())
     
     # Calculate image similarity (if image is uploaded)
